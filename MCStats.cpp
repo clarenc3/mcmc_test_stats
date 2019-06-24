@@ -10,6 +10,23 @@
 #include "TH1D.h"
 #include "TMath.h"
 
+enum test_type {
+  // Use only statistical Poisson likelihood
+  LLHStat_StatOnly, 
+
+  // Use Pearson statistic, i.e. assuming Gaussian variation with Poisson error on both data and MC 
+  LLHStat_PearsonPen, 
+
+  // Use Pearsons statistic, i.e. assuming Gaussian variation with Poisson error on data only
+  LLHStat_PearsonNoPen, 
+
+  // Use statistical Poisson likelihood by fluctuating the MC around the MC central value and using that for the MC in the likelihood
+  LLHStat_StatWithFluc, 
+
+  // Use statistical Poisson likelihood and introduce a normalisation penalty relative the uncertainty in the bin
+  LLHStat_StatWithNorm
+};
+
 // Standard LLH calculator
 double calcLLH(TH1D* hdata, TH1D* hmc) {
   double LLH=0;
@@ -104,7 +121,6 @@ void reweightwithnorm(TH1D* hmcpred, std::vector<double> MC, TF1* nom, TF1* pred
 double calcp(double data, double mc, double MCscaling) {
   double minllh = 99999;
 
-
   // Just follows 1993 Barlow Beeston paper
   // Observed data events
   double di = data;
@@ -156,12 +172,13 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
     std::cerr << "I take 0, 1, 2, 3, 4 as arguments" << std::endl;
     exit(-1);
   }
+  test_type testtype = static_cast<test_type>(fittype);
   // random number
   TRandom3* rnd = new TRandom3(10);
   // The mean of the parameter we want to measure
-  double mean = 0;
+  double mean_prod = -2.5;
   // The sigma of the parameter we want to measure
-  double sigma = 1;
+  double sigma_prod = 3;
 
   // The number of data events
   double norm = normIn;
@@ -172,7 +189,7 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   std::vector<double> MC;
 
   // Make some new MC following the Gaussian
-  for (int i = 0; i < int(norm*MCfactor); i++) MC.push_back(rnd->Gaus(mean, sigma));
+  for (int i = 0; i < int(norm*MCfactor); i++) MC.push_back(0.7*rnd->Gaus(mean_prod, sigma_prod));
   // Sort the MC
   sort(MC.begin(), MC.end()); 
 
@@ -243,6 +260,9 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
     hData->SetBinError(i+1, sqrt(hData->GetBinContent(i+1)));
   }
 
+  double mean = 0;
+  double sigma = 1;
+
   TF1* gausnominal = new TF1("gausnom","gaus",minx,maxx);
   gausnominal->SetParameters(1, mean, sigma);
   TF1* gauspred = new TF1("gauspred","gaus",minx,maxx);
@@ -256,17 +276,17 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
 
   gauspred->SetParameters(1, meanp, sigmap);
   // Do the first reweight
-  if (fittype < 4) reweight(hMCnorm, MC, gausnominal, gauspred);
-  else if (fittype == 4) reweightwithnorm(hMCnorm, MC, gausnominal, gauspred, binnormp);
+  if (testtype < LLHStat_StatWithNorm) reweight(hMCnorm, MC, gausnominal, gauspred);
+  else if (testtype == LLHStat_StatWithNorm) reweightwithnorm(hMCnorm, MC, gausnominal, gauspred, binnormp);
   hMCnorm->Scale(norm/double(MC.size()));
   double LLH;
 
   // Calculate the likelihood
-  if      (fittype == 0) LLH = calcLLH(hData, hMCnorm);
-  else if (fittype == 1) LLH = calcLLHwithPen(hData, hMCnorm, true);
-  else if (fittype == 2) LLH = calcLLHwithPen(hData, hMCnorm, false);
-  else if (fittype == 3) LLH = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
-  else if (fittype == 4) LLH = calcLLHwithnorm(hData, hMCnorm, binnormp, binuncert);
+  if      (testtype == LLHStat_StatOnly) LLH = calcLLH(hData, hMCnorm);
+  else if (testtype == LLHStat_PearsonPen) LLH = calcLLHwithPen(hData, hMCnorm, true);
+  else if (testtype == LLHStat_PearsonNoPen) LLH = calcLLHwithPen(hData, hMCnorm, false);
+  else if (testtype == LLHStat_StatWithFluc) LLH = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
+  else if (testtype == LLHStat_StatWithNorm) LLH = calcLLHwithnorm(hData, hMCnorm, binnormp, binuncert);
 
   // Proposed likelihood
   double LLHp = LLH;
@@ -275,7 +295,7 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   const int nsteps = 1E4;
 
   TString filename = "MCStats_fittype_";
-  filename += fittype;
+  filename += testtype;
   filename += Form("_nData%2.2f_MCscale%1.1f_nsteps%i_muSigmaOnly_dataclone", normIn, MCfactorIn, nsteps);
   filename += ".root";
 
@@ -287,7 +307,7 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   tree->Branch("norm",&norm,"norm/D");
   tree->Branch("llh",&LLH,"llh/D");
   tree->Branch("accprob",&accProb,"accProb/D");
-  if (fittype == 4) {
+  if (testtype == LLHStat_StatWithNorm) {
     for(int i=0; i<binnorm.size(); i++) {
       TString name="bin";
       name+=i;
@@ -298,6 +318,9 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   }
 
   //std::cout << meanp << " " << sigmap << " " << normp << std::endl;
+  // Update the starting step
+  mean = meanp;
+  sigma = sigmap;
 
   // Run the MCMC
   int naccept = 0;
@@ -318,7 +341,7 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
     normp = norm;
 
     // For method 2 throw the random bin
-    if (fittype == 4) {
+    if (testtype == LLHStat_StatWithNorm) {
       for (int j = 0; j < binnormp.size(); j++) {
         binnormp[j] = rnd->Gaus(binnorm[j], binuncert[j]*0.1);
       }
@@ -326,18 +349,17 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
 
     gauspred->SetParameters(1, meanp, sigmap);
     // reweight the monte carlo prediction
-    if (fittype < 4) reweight(hMCnorm, MC, gausnominal, gauspred);
-    else if (fittype == 4) reweightwithnorm(hMCnorm, MC, gausnominal, gauspred, binnormp);
-    hMCnorm->Scale(norm/double(MC.size()));
+    if (testtype < LLHStat_StatWithNorm) reweight(hMCnorm, MC, gausnominal, gauspred);
+    else if (testtype == LLHStat_StatWithNorm) reweightwithnorm(hMCnorm, MC, gausnominal, gauspred, binnormp);
     // Scale the MC back to data "POT"
+    hMCnorm->Scale(norm/double(MC.size()));
 
-    // Calculate the likelihood for the proposed step
-    if      (fittype == 0) LLHp = calcLLH(hData, hMCnorm);
-    else if (fittype == 1) LLHp = calcLLHwithPen(hData, hMCnorm, true);
-    else if (fittype == 2) LLHp = calcLLHwithPen(hData, hMCnorm, false);
-    else if (fittype == 3) LLHp = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
-    else if (fittype == 4) LLHp = calcLLHwithnorm(hData, hMCnorm, binnormp, binuncert);
     // Full Barlow-Beeston, which solves the normalisation in each bin
+    if      (testtype == LLHStat_StatOnly) LLHp = calcLLH(hData, hMCnorm);
+    else if (testtype == LLHStat_PearsonPen) LLHp = calcLLHwithPen(hData, hMCnorm, true);
+    else if (testtype == LLHStat_PearsonNoPen) LLHp = calcLLHwithPen(hData, hMCnorm, false);
+    else if (testtype == LLHStat_StatWithFluc) LLHp = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
+    else if (testtype == LLHStat_StatWithNorm) LLHp = calcLLHwithnorm(hData, hMCnorm, binnormp, binuncert);
 
     // Do the simple MCMC accept-reject
     accProb = TMath::Min(1., TMath::Exp(LLH-LLHp));
@@ -350,13 +372,13 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
       LLH = LLHp;
       naccept++;
       // Update the bin normalisation parameter if accepted
-      if (fittype == 4) {
+      if (testtype == LLHStat_StatWithNorm) {
         for (int j = 0; j < binnorm.size(); j++) binnorm[j] = binnormp[j];
       }
     }
     tree->Fill();
   }
-  std::cout << "fittype " << fittype << " had " << double(naccept)/double(nsteps)*100.0 << "% acceptance" << std::endl;
+  std::cout << "fittype " << testtype << " had " << double(naccept)/double(nsteps)*100.0 << "% acceptance" << std::endl;
   tree->Write();
   hData->Write();
   hMC->Write();
