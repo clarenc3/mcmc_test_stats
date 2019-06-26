@@ -14,27 +14,39 @@ enum test_type {
   // Use only statistical Poisson likelihood
   LLHStat_StatOnly, 
 
-  // Use Pearson statistic, i.e. assuming Gaussian variation with Poisson error on both data and MC 
-  LLHStat_PearsonPen, 
+  // Use only statistical Poisson likelihood with a MC statistics penalty
+  LLHStat_StatOnlyPen, 
 
   // Use Pearsons statistic, i.e. assuming Gaussian variation with Poisson error on data only
   LLHStat_PearsonNoPen, 
+
+  // Use Pearson statistic, i.e. assuming Gaussian variation with Poisson error on both data and MC 
+  LLHStat_PearsonPen, 
 
   // Use statistical Poisson likelihood by fluctuating the MC around the MC central value and using that for the MC in the likelihood
   LLHStat_StatWithFluc, 
 
   // Use statistical Poisson likelihood and introduce a normalisation penalty relative the uncertainty in the bin
-  LLHStat_StatWithNorm
+  LLHStat_StatWithNorm, 
+
+  // Barlow-Beeston with Gaussian
+  LLH_BarlowBeestonGauss,
+
+  // Barlow-Beeston with Poisson
+  LLH_BarlowBeestonPoisson
 };
 
 // Standard LLH calculator
-double calcLLH(TH1D* hdata, TH1D* hmc) {
+// Add in MC statistical penalty
+double calcLLH(TH1D* hdata, TH1D* hmc, TH1D *herrors = NULL, bool penalty = false) {
   double LLH=0;
   for(int i=1; i<=hdata->GetNbinsX(); i++) {
     double dat=hdata->GetBinContent(i);
     double mc=hmc->GetBinContent(i);
     if(dat>0) LLH+=mc-dat+dat*TMath::Log(dat/mc);
     else LLH+=mc;
+    
+    if (penalty && herrors->GetBinContent(i) > 0) LLH += 1./herrors->GetBinError(i);
   }
   return LLH;
 }
@@ -52,13 +64,6 @@ double calcLLHwithvar(TH1D* hdata, TH1D* hmc, TH1D* herrors, TRandom3* rnd) {
 
     if (dat > 0 && mc > 0) LLH += mc-dat+dat*TMath::Log(dat/mc);
     else LLH += mc;
-    /*
-    std::cout << "***START" << std::endl;
-    std::cout << i << " " << LLH << std::endl;
-    std::cout << dat << " " << mc << std::endl;
-    std::cout << LLH << std::endl;
-    std::cout << "***END" << std::endl;
-    */
   }
   return LLH;
 }
@@ -76,51 +81,52 @@ double calcLLHwithnorm(TH1D* hdata, TH1D* hmc,std::vector<double> norm, std::vec
   return LLH;
 }
 
-double calcLLHwithPen(TH1D* hdata, TH1D* hmc, bool withPen = true) {
+// Likelihood a la Pearson, which assumes a Gaussian distributed statistic with an error of sqrt(N) --- i.e. its error is Poissonian
+// withPen = true penalises on both data and MC statistics
+// withPen = false penalises on data only
+double calcLLHwithPen(TH1D* hdata, TH1D* hmc, TH1D *herrors, bool withPen = true) {
   double LLH=0;
   for(int i=1; i<=hdata->GetNbinsX(); i++) {
     double dat=hdata->GetBinContent(i);
     double mc=hmc->GetBinContent(i);
-    if (withPen && dat+mc>0) LLH += (dat-mc)*(dat-mc)/(dat+mc);
-    else {
+    double mcraw = herrors->GetBinContent(i+1);
+    if (withPen && dat+mc>0) LLH += (dat-mc)*(dat-mc)/(dat+mcraw);
+    else if (!withPen) {
       if (dat != 0 && dat > 0) LLH += (dat-mc)*(dat-mc)/(dat);
-      else if (mc > 0) LLH += (dat-mc)*(dat-mc)/(mc);
+      else if (mc > 0) LLH += (dat-mc)*(dat-mc)/(mcraw);
     }
   }
   return LLH;
 }
 
-//void reweight(TH1D* hmcpred, std::vector<double> MC, double mean, double sigma, double norm, TF1* nom, TF1* pred) {
 void reweight(TH1D* hmcpred, std::vector<double> MC, TF1* nom, TF1* pred) {
   // Reset the Monte Carlo prediction
   hmcpred->Reset();
-  //pred->SetParameters(1, mean, sigma);
   // Reweight each MC event
   for (int i = 0; i < MC.size(); i++) {
-    double fill = pred->Eval(MC[i])/nom->Eval(MC[i]);
-    //std::cout << nom->Eval(MC[i]) << std::endl;
+    double preded = pred->Eval(MC[i]);
+    double nomed = nom->Eval(MC[i]);
+    double fill = preded/nomed;
+    // Cap at 10
+    //if (fill > 100) fill = 100;
     hmcpred->Fill(MC[i], fill);
   }
-  // Scale back to data events
-  //hmcpred->Scale(norm/double(MC.size()));
 }
 
-//void reweightwithnorm(TH1D* hmcpred, std::vector<double> MC, double mean, double sigma, double norm, TF1* nom, TF1* pred, std::vector<double> binnorm) {
+// Reweight by changing the bin normalisation and doing a reweight
 void reweightwithnorm(TH1D* hmcpred, std::vector<double> MC, TF1* nom, TF1* pred, std::vector<double> binnorm) {
   hmcpred->Reset();
-  //pred->SetParameters(1, mean, sigma);
   for (int i = 0; i < MC.size(); i++) {
     int bin = hmcpred->FindBin(MC[i]);
-    hmcpred->AddBinContent(bin, binnorm[bin-1] * pred->Eval(MC[i])/nom->Eval(MC[i]));
+    double fill = pred->Eval(MC[i])/nom->Eval(MC[i]);
+    if (fill > 100) fill = 100;
+    hmcpred->AddBinContent(bin, binnorm[bin-1] * fill);
   }
-  //hmcpred->Scale(norm/double(MC.size()));
 }
 
 
 // Calculate the normalisation probabilities using Newton Rhapson
-double calcp(double data, double mc, double MCscaling) {
-  double minllh = 99999;
-
+double calcp(double data, double mc, double mcraw) {
   // Just follows 1993 Barlow Beeston paper
   // Observed data events
   double di = data;
@@ -130,7 +136,11 @@ double calcp(double data, double mc, double MCscaling) {
   // Parameter of convenience
   double ti = 1-di/fi;
 
-  double ai = fi * MCscaling;
+  double ai = mcraw;
+
+  double pi = fi/(ai-fi-di);
+
+  double Ai = fi/pi;
 
   // fi is the generated number of statistics in this bin
   // pi is the normalisation of the events
@@ -138,27 +148,63 @@ double calcp(double data, double mc, double MCscaling) {
   // fi = pi*Ai
   // Want to find the pi (the normalisation parameters) and the Ai we don't really care about
   // First guess of pi
-  double pi = -1.0/ti;
+  //double pi = -1.0/ti;
   
   // Needs to be positive, puts constraint on pi
-  double Ai = ai/(1+pi*ti);
+  //double Ai = ai/(1+pi*ti);
   // Solve eq 15 for the ti
 
   // sum over i ti*Ai = 0 (eq 16)
 
   // The likelihood we're trying to maximise
-  //double llh = di*TMath::Log(fi)-fi + ai*TMath::Log(Ai)-Ai;
+  double statllh = 0;
+  if (di>0) statllh += fi-di+di*TMath::Log(di/fi);
+  else statllh += fi;
+  double bbllh = Ai-ai+ai*TMath::Log(ai/Ai);
+  //double bbllh = ai*TMath::Log(Ai)-Ai;
 
-  return minllh;
+  return statllh+bbllh;
+}
+
+//double calcp_lite(double dat, double mc, double mcraw) {
+double calcp_lite(double dat, double mc, double uncert) {
+  // fractional error
+  if (uncert == 0) return 0;
+  double fracerror = uncert;
+
+  double temp = (mc*fracerror*fracerror-1);
+  double temp2 = temp*temp + 4*dat*fracerror*fracerror;
+  if (temp2 < 0) {
+    std::cerr << "eurgh no root for b^2-4ac=" << temp2 << std::endl;
+    throw;
+  }
+
+  double beta = (-1*temp + sqrt(temp2))/2.;
+
+  double newmc = mc*beta;
+
+
+  double stat = 0;
+  if (dat == 0) stat = newmc;
+  else if (newmc > 0) stat = newmc-dat+dat*TMath::Log(dat/newmc);
+  //else return 9999999999999;
+  double pen = (beta-1)*(beta-1)/(2*fracerror*fracerror);
+  //double llh = -1*dat*TMath::Log(newmc)+newmc+(beta-1)*(beta-1)/(2*fracerror*fracerror);
+  //std::cout << "dat, mc, beta, newmc, fracerror  = " << dat << " " << mc << " " << beta << " " << newmc << " " << fracerror << std::endl;
+  //std::cout << "stat, pen = " << stat << " " << pen << " " << beta << std::endl;
+  //std::cout << "stat/pen = " << stat/pen << std::endl;
+  return stat+pen;
 }
 
 //BarlowBeeston() {
-double LLHBarlowBeeston(TH1D *hData, TH1D *hMC, double MCscaling) {
+double LLHBarlowBeeston(TH1D *hData, TH1D *hMC, std::vector<double> binuncert) {
   double llht = 0.0;
 
   for (int i = 0; i < hData->GetXaxis()->GetNbins()+1; ++i) {
     // Calculate the pi for each i bin
-    double llh = calcp(hData->GetBinContent(i+1), hMC->GetBinContent(i+1), MCscaling);
+    //double llh = calcp(hData->GetBinContent(i+1), hMC->GetBinContent(i+1), hMCraw->GetBinContent(i+1));
+    double llh = calcp_lite(hData->GetBinContent(i+1), hMC->GetBinContent(i+1), binuncert[i]);
+    //std::cout << i << " = " << llh << std::endl;
     // Add to the total likelihood
     llht += llh;
   }
@@ -168,8 +214,16 @@ double LLHBarlowBeeston(TH1D *hData, TH1D *hMC, double MCscaling) {
 
 
 void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
-  if (fittype > 4 || fittype < 0) {
-    std::cerr << "I take 0, 1, 2, 3, 4 as arguments" << std::endl;
+  if (fittype > 7 || fittype < 0) {
+    std::cerr << "I take 0, 1, 2, 3, 4, 5, 6 as arguments" << std::endl;
+    std::cerr << "  0 = LLHStat_StatOnly" << std::endl;
+    std::cerr << "  1 = LLHStat_StatOnlyPen" << std::endl;
+    std::cerr << "  2 = LLHStat_PearsonNoPen" << std::endl;
+    std::cerr << "  3 = LLHStat_PearsonPen" << std::endl;
+    std::cerr << "  4 = LLHStat_StatWithFluc" << std::endl;
+    std::cerr << "  5 = LLHStat_StatWithNorm" << std::endl;
+    std::cerr << "  6 = LLH_BarlowBeestonGaus" << std::endl;
+    std::cerr << "  7 = LLH_BarlowBeestonPoiss" << std::endl;
     exit(-1);
   }
   test_type testtype = static_cast<test_type>(fittype);
@@ -188,11 +242,6 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
 
   std::vector<double> MC;
 
-  // Make some new MC following the Gaussian
-  for (int i = 0; i < int(norm*MCfactor); i++) MC.push_back(0.7*rnd->Gaus(mean_prod, sigma_prod));
-  // Sort the MC
-  sort(MC.begin(), MC.end()); 
-
   // Vector of the binedges
   std::vector<double> binedges;
   int minx = -4;
@@ -202,6 +251,18 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   int minnum = 0;
   // Minimum width of each bin
   double mindist = 0.2;
+
+  // Make some new MC following the Gaussian
+  for (int i = 0; i < int(norm*MCfactor); i++) {
+    double num = 0.7*rnd->Gaus(mean_prod, sigma_prod);
+    if (num < minx || num > maxx) {
+      i--;
+      continue;
+    }
+    MC.push_back(num);
+  }
+  // Sort the MC
+  sort(MC.begin(), MC.end()); 
 
   // Set some uniform binning
   for (double it = minx; it <= maxx; it += mindist) binedges.push_back(it);
@@ -225,10 +286,14 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   //for (int i = 0; i < binedges.size(); ++i) std::cout << binedges[i] << std::endl;
 
   // The parameter values
-  TH1D* hMC = new TH1D("hMC", ";Some Parameter", binedges.size()-1, &binedges[0]);
+  TH1D* hMC = new TH1D("hMC", ";p_{#mu} Fake", binedges.size()-1, &binedges[0]);
 
   // Fill the histogram with our MC
-  for(int i=0; i<MC.size(); i++) hMC->Fill(MC[i]);
+  for (int i=0; i<MC.size(); i++) {
+    // Throw away rubbish
+    if (MC[i] < binedges.front() || MC[i] > binedges.back()) continue;
+    hMC->Fill(MC[i]);
+  }
   hMC->Sumw2();
   hMC->Draw();
 
@@ -263,9 +328,9 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   double mean = 0;
   double sigma = 1;
 
-  TF1* gausnominal = new TF1("gausnom","gaus",minx,maxx);
+  TF1* gausnominal = new TF1("gausnom","gaus", MC.front(), MC.back());
   gausnominal->SetParameters(1, mean, sigma);
-  TF1* gauspred = new TF1("gauspred","gaus",minx,maxx);
+  TF1* gauspred = new TF1("gauspred","gaus", MC.front(), MC.back());
   gauspred->SetParameters(1, mean, sigma);
 
   // The proposed parameters
@@ -276,17 +341,19 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
 
   gauspred->SetParameters(1, meanp, sigmap);
   // Do the first reweight
-  if (testtype < LLHStat_StatWithNorm) reweight(hMCnorm, MC, gausnominal, gauspred);
-  else if (testtype == LLHStat_StatWithNorm) reweightwithnorm(hMCnorm, MC, gausnominal, gauspred, binnormp);
+  if (testtype != LLHStat_StatWithNorm) reweight(hMCnorm, MC, gausnominal, gauspred);
+  else reweightwithnorm(hMCnorm, MC, gausnominal, gauspred, binnormp);
   hMCnorm->Scale(norm/double(MC.size()));
   double LLH;
 
   // Calculate the likelihood
-  if      (testtype == LLHStat_StatOnly) LLH = calcLLH(hData, hMCnorm);
-  else if (testtype == LLHStat_PearsonPen) LLH = calcLLHwithPen(hData, hMCnorm, true);
-  else if (testtype == LLHStat_PearsonNoPen) LLH = calcLLHwithPen(hData, hMCnorm, false);
+  if      (testtype == LLHStat_StatOnly) LLH = calcLLH(hData, hMCnorm, hMC, false);
+  else if (testtype == LLHStat_StatOnlyPen) LLH = calcLLH(hData, hMCnorm, hMC, true);
+  else if (testtype == LLHStat_PearsonNoPen) LLH = calcLLHwithPen(hData, hMCnorm, hMC, false);
+  else if (testtype == LLHStat_PearsonPen) LLH = calcLLHwithPen(hData, hMCnorm, hMC, true);
   else if (testtype == LLHStat_StatWithFluc) LLH = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
   else if (testtype == LLHStat_StatWithNorm) LLH = calcLLHwithnorm(hData, hMCnorm, binnormp, binuncert);
+  else if (testtype == LLH_BarlowBeestonGauss) LLH = LLHBarlowBeeston(hData, hMCnorm, binuncert);
 
   // Proposed likelihood
   double LLHp = LLH;
@@ -326,8 +393,6 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   int naccept = 0;
   for(int i=0; i<nsteps; i++) {
 
-    //std::cout << meanp << " " << sigmap << " " << normp << std::endl;
-
     if (i % (nsteps/20) == 0) {
       std::cout << "On step " << i << "/" << nsteps << " (" << int(double(i)/double(nsteps)*100.0) << "%)" << std::endl;
     }
@@ -349,17 +414,19 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
 
     gauspred->SetParameters(1, meanp, sigmap);
     // reweight the monte carlo prediction
-    if (testtype < LLHStat_StatWithNorm) reweight(hMCnorm, MC, gausnominal, gauspred);
-    else if (testtype == LLHStat_StatWithNorm) reweightwithnorm(hMCnorm, MC, gausnominal, gauspred, binnormp);
+    if (testtype != LLHStat_StatWithNorm) reweight(hMCnorm, MC, gausnominal, gauspred);
+    else reweightwithnorm(hMCnorm, MC, gausnominal, gauspred, binnormp);
     // Scale the MC back to data "POT"
     hMCnorm->Scale(norm/double(MC.size()));
 
     // Full Barlow-Beeston, which solves the normalisation in each bin
     if      (testtype == LLHStat_StatOnly) LLHp = calcLLH(hData, hMCnorm);
-    else if (testtype == LLHStat_PearsonPen) LLHp = calcLLHwithPen(hData, hMCnorm, true);
-    else if (testtype == LLHStat_PearsonNoPen) LLHp = calcLLHwithPen(hData, hMCnorm, false);
+    else if (testtype == LLHStat_StatOnlyPen) LLHp = calcLLH(hData, hMCnorm, hMC, true);
+    else if (testtype == LLHStat_PearsonNoPen) LLHp = calcLLHwithPen(hData, hMCnorm, hMC, false);
+    else if (testtype == LLHStat_PearsonPen) LLHp = calcLLHwithPen(hData, hMCnorm, hMC, true);
     else if (testtype == LLHStat_StatWithFluc) LLHp = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
     else if (testtype == LLHStat_StatWithNorm) LLHp = calcLLHwithnorm(hData, hMCnorm, binnormp, binuncert);
+    else if (testtype == LLH_BarlowBeestonGauss) LLHp = LLHBarlowBeeston(hData, hMCnorm, binuncert);
 
     // Do the simple MCMC accept-reject
     accProb = TMath::Min(1., TMath::Exp(LLH-LLHp));
