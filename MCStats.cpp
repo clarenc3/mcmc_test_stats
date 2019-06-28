@@ -119,7 +119,7 @@ void reweightwithnorm(TH1D* hmcpred, std::vector<double> MC, TF1* nom, TF1* pred
   for (int i = 0; i < MC.size(); i++) {
     int bin = hmcpred->FindBin(MC[i]);
     double fill = pred->Eval(MC[i])/nom->Eval(MC[i]);
-    if (fill > 100) fill = 100;
+    //if (fill > 100) fill = 100;
     hmcpred->AddBinContent(bin, binnorm[bin-1] * fill);
   }
 }
@@ -182,7 +182,6 @@ double calcp_lite(double dat, double mc, double uncert) {
   double beta = (-1*temp + sqrt(temp2))/2.;
 
   double newmc = mc*beta;
-
 
   double stat = 0;
   if (dat == 0) stat = newmc;
