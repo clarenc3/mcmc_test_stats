@@ -21,10 +21,7 @@ enum test_type {
   // Use only statistical Poisson likelihood
   LLHStat_StatOnly, 
 
-  // Use only statistical Poisson likelihood with a MC statistics penalty
-  LLHStat_StatOnlyPen, 
-
-  // Use Pearsons statistic, i.e. assuming Gaussian variation with Poisson error on data only
+  // Use Pearson statistic, i.e. assuming Gaussian variation with Poisson error on data only
   LLHStat_PearsonNoPen, 
 
   // Use Pearson statistic, i.e. assuming Gaussian variation with Poisson error on both data and MC 
@@ -40,13 +37,17 @@ enum test_type {
   LLH_BarlowBeestonGauss,
 
   // Barlow-Beeston with Poisson
-  LLH_BarlowBeestonPoisson
+  LLH_BarlowBeestonPoisson,
+
+  // Tianlu LLH
+  LLH_Tianlu
 };
 
 // A class to hold information about the fit
 class storer {
   public:
-    storer();
+    storer(int);
+    ~storer();
     void Setup();
     void SetWeighting();
     void ReWeight();
@@ -65,12 +66,15 @@ class storer {
     void SetMeanProd(double meanp) { mean_prod = meanp; }
     void SetSigmaProd(double sigmap) { sigma_prod = sigmap; }
 
+    void SetTestType(test_type type) { testtype = type; }
+
   private:
     TH1D* hData;
     TH1D* hMC;
     TH1D* hMCnorm;
-    TF1* gausnom;
-    TF1* gauspred;
+    TF1* bkg;
+    TF1* sig;
+    TF1* datagen;
     test_type testtype;
 
     double mean;

@@ -2,15 +2,13 @@
 
 // Standard LLH calculator
 // Add in MC statistical penalty
-double calcLLH(TH1D* hdata, TH1D* hmc, TH1D *herrors = NULL, bool penalty = false) {
+double calcLLH(TH1D* hdata, TH1D* hmc) {
   double LLH=0;
   for(int i=1; i<=hdata->GetNbinsX(); i++) {
     double dat=hdata->GetBinContent(i);
     double mc=hmc->GetBinContent(i);
-    if(dat>0) LLH+=mc-dat+dat*TMath::Log(dat/mc);
-    else LLH+=mc;
-    
-    if (penalty && herrors->GetBinContent(i) > 0) LLH += 1./herrors->GetBinError(i);
+    if(dat>0) LLH+=2*(mc-dat+dat*TMath::Log(dat/mc));
+    else LLH+=2*mc;
   }
   return LLH;
 }
@@ -19,28 +17,29 @@ double calcLLH(TH1D* hdata, TH1D* hmc, TH1D *herrors = NULL, bool penalty = fals
 // herrors is the nominal MC histogram
 double calcLLHwithvar(TH1D* hdata, TH1D* hmc, TH1D* herrors, TRandom3* rnd) {
   double LLH=0;
-  for(int i=1; i<=hdata->GetNbinsX(); i++) {
-    double dat=hdata->GetBinContent(i);
+  for(int i = 0; i < hdata->GetNbinsX()+1; i++) {
+    double dat = hdata->GetBinContent(i+1);
     // Throw the MC within the fractional MC statistical error
     double mc;
-    if (herrors->GetBinContent(i) > 0) mc = rnd->Gaus(hmc->GetBinContent(i), herrors->GetBinError(i)/herrors->GetBinContent(i)*hmc->GetBinContent(i));
-    else mc = hmc->GetBinContent(i);
+    double uncert = hmc->GetSumw2()->GetArray()[i+1];
+    if (uncert > 0) mc = rnd->Gaus(hmc->GetBinContent(i+1), uncert*hmc->GetBinContent(i+1));
+    else mc = hmc->GetBinContent(i+1);
 
-    if (dat > 0 && mc > 0) LLH += mc-dat+dat*TMath::Log(dat/mc);
-    else LLH += mc;
+    if (dat > 0 && mc > 0) LLH += 2*(mc-dat+dat*TMath::Log(dat/mc));
+    else LLH += 2*mc;
   }
   return LLH;
 }
 
 
-double calcLLHwithnorm(TH1D* hdata, TH1D* hmc,std::vector<double> norm, std::vector<double> uncert) {
+double calcLLHwithnorm(TH1D* hdata, TH1D* hmc, std::vector<double> norm, std::vector<double> uncert) {
   double LLH=0;
-  for(int i=1; i<=hdata->GetNbinsX(); i++) {
-    double dat=hdata->GetBinContent(i);
-    double mc=hmc->GetBinContent(i);
-    if(dat>0) LLH+=mc-dat+dat*TMath::Log(dat/mc);
-    else LLH+=mc;
-    if (uncert[i-1] > 0) LLH+=0.5*pow((norm[i-1]-1)/uncert[i-1],2);
+  for(int i = 0; i < hdata->GetNbinsX()+1; i++) {
+    double dat = hdata->GetBinContent(i+1);
+    double mc = hmc->GetBinContent(i+1);
+    if(dat>0) LLH += 2*(mc-dat+dat*TMath::Log(dat/mc));
+    else LLH += 2*mc;
+    if (uncert[i] > 0) LLH += pow((norm[i]-1)/uncert[i],2);
   }
   return LLH;
 }
@@ -50,29 +49,55 @@ double calcLLHwithnorm(TH1D* hdata, TH1D* hmc,std::vector<double> norm, std::vec
 // withPen = false penalises on data only
 double calcLLHwithPen(TH1D* hdata, TH1D* hmc, TH1D *herrors, bool withPen = true) {
   double LLH=0;
-  for(int i=1; i<=hdata->GetNbinsX(); i++) {
-    double dat=hdata->GetBinContent(i);
-    double mc=hmc->GetBinContent(i);
-    double mcraw = herrors->GetBinContent(i+1);
-    if (withPen && dat+mc>0) LLH += (dat-mc)*(dat-mc)/(dat+mcraw);
+  for(int i = 0; i < hdata->GetNbinsX()+1; i++) {
+    double dat = hdata->GetBinContent(i+1);
+    double mc = hmc->GetBinContent(i+1);
+    //double mcraw = herrors->GetBinContent(i+1);
+    double sumw2 = hmc->GetSumw2()->GetArray()[i+1];
+    if (withPen && dat+mc>0) LLH += (dat-mc)*(dat-mc)/(dat+sumw2);
     else if (!withPen) {
       if (dat != 0 && dat > 0) LLH += (dat-mc)*(dat-mc)/(dat);
-      else if (mc > 0) LLH += (dat-mc)*(dat-mc)/(mcraw);
+      else if (mc > 0) LLH += (dat-mc)*(dat-mc)/(sumw2);
     }
   }
   return LLH;
 }
 
-void reweight(TH1D* hmcpred, std::vector<double> MC, TF1* nom, TF1* pred) {
+// Try calculating LLH with Tianlu's method
+double calcLLHTianlu(TH1D *hdata, TH1D *hmc) {
+  double llh = 0.0; 
+  for (int i = 0; i < hdata->GetXaxis()->GetNbins()+1; ++i) {
+    double data = hdata->GetBinContent(i+1);
+    double mc = hmc->GetBinContent(i+1);
+    double w2 = hmc->GetSumw2()->GetArray()[i+1];
+    if (w2 == 0) continue;
+
+    double b = mc/w2;
+    double a = mc*b+1;
+    double k = data;
+
+    llh += a * std::log(b) + std::lgamma(k+a)-std::lgamma(k+1)-((k+a)*std::log1p(b))-std::lgamma(a);
+    //if (std::isnan(llh)) throw;
+  }
+
+  return -2*llh;
+}
+
+void reweight(TH1D* hmcpred, std::vector<double> MC, TF1* sig, TF1 *bkg, double scale) {
   // Reset the Monte Carlo prediction
   hmcpred->Reset();
+  double nominal = scale/MC.size();
   // Reweight each MC event
   for (int i = 0; i < MC.size(); i++) {
-    double preded = pred->Eval(MC[i]);
-    double nomed = nom->Eval(MC[i]);
-    double fill = preded/nomed;
-    hmcpred->Fill(MC[i], fill);
+    double pred = sig->Eval(MC[i]);
+    double nom = bkg->Eval(MC[i]);
+    double weight = (1+pred/nom)*nominal;
+    hmcpred->Fill(MC[i], weight);
   }
+  //for (int i = 0; i < hmcpred->GetXaxis()->GetNbins()+1; ++i) {
+    //std::cout << i << " " << hmcpred->GetSumw2()->GetArray()[i+1] << std::endl;
+  //}
+  //std::cout << "*" << std::endl;
 }
 
 // Reweight by changing the bin normalisation and doing a reweight
@@ -80,7 +105,7 @@ void reweightwithnorm(TH1D* hmcpred, std::vector<double> MC, TF1* nom, TF1* pred
   hmcpred->Reset();
   for (int i = 0; i < MC.size(); i++) {
     int bin = hmcpred->FindBin(MC[i]);
-    double fill = pred->Eval(MC[i])/nom->Eval(MC[i]);
+    double fill = 1+pred->Eval(MC[i])/nom->Eval(MC[i]);
     hmcpred->AddBinContent(bin, binnorm[bin-1] * fill);
   }
 }
@@ -127,7 +152,6 @@ double calcp(double data, double mc, double mcraw) {
   return statllh+bbllh;
 }
 
-//double calcp_lite(double dat, double mc, double mcraw) {
 double calcp_lite(double dat, double mc, double uncert) {
   // fractional error
   if (uncert == 0) return 0;
@@ -141,39 +165,50 @@ double calcp_lite(double dat, double mc, double uncert) {
   }
 
   double beta = (-1*temp + sqrt(temp2))/2.;
-
   double newmc = mc*beta;
 
   double stat = 0;
-  if (dat == 0) stat = newmc;
-  else if (newmc > 0) stat = newmc-dat+dat*TMath::Log(dat/newmc);
-  //else return 9999999999999;
-  double pen = (beta-1)*(beta-1)/(2*fracerror*fracerror);
-  //double llh = -1*dat*TMath::Log(newmc)+newmc+(beta-1)*(beta-1)/(2*fracerror*fracerror);
-  //std::cout << "dat, mc, beta, newmc, fracerror  = " << dat << " " << mc << " " << beta << " " << newmc << " " << fracerror << std::endl;
-  //std::cout << "stat, pen = " << stat << " " << pen << " " << beta << std::endl;
-  //std::cout << "stat/pen = " << stat/pen << std::endl;
+  if (dat == 0) stat = 2*newmc;
+  else if (newmc > 0) stat = 2*(newmc-dat+dat*TMath::Log(dat/newmc));
+  double pen = (beta-1)*(beta-1)/(fracerror*fracerror);
   return stat+pen;
 }
 
-//BarlowBeeston() {
 double LLHBarlowBeeston(TH1D *hData, TH1D *hMC, std::vector<double> binuncert) {
   double llht = 0.0;
 
   for (int i = 0; i < hData->GetXaxis()->GetNbins()+1; ++i) {
     // Calculate the pi for each i bin
     //double llh = calcp(hData->GetBinContent(i+1), hMC->GetBinContent(i+1), hMCraw->GetBinContent(i+1));
-    double llh = calcp_lite(hData->GetBinContent(i+1), hMC->GetBinContent(i+1), binuncert[i]);
+    double data = hData->GetBinContent(i+1);
+    double mc = hMC->GetBinContent(i+1);
+    double mcuncert = sqrt(hMC->GetSumw2()->GetArray()[i+1])/mc;
+    //std::cout << mc << " " << mcuncert << std::endl;
+    //std::cout << mc << " " << mcuncert << std::endl;
+    //std::cout << binuncert[i] << std::endl;
+    //std::cout << sqrt(mcuncert)/mc << std::endl;
+    double llh = calcp_lite(data, mc, mcuncert);
     //std::cout << i << " = " << llh << std::endl;
     // Add to the total likelihood
     llht += llh;
   }
+  //throw;
 
   return llht;
 }
 
-storer::storer() {
-  rnd = new TRandom3(1234);
+storer::storer(int seed=0) {
+  rnd = new TRandom3(seed);
+}
+
+// Destructor
+storer::~storer() {
+  delete hData;
+  delete hMC;
+  delete hMCnorm;
+  delete sig;
+  delete bkg;
+  delete rnd;
 }
 
 // Do the evaluation
@@ -184,6 +219,7 @@ double storer::DoEval(const double *x) {
 
   // Do the reweight
   ReWeight();
+  //std::cout << meanp << " " << sigmap << " = " << GetLikelihood() << std::endl;
 
   return GetLikelihood();
 }
@@ -192,17 +228,21 @@ void storer::Setup() {
 
   // Vector of the binedges
   std::vector<double> binedges;
-  int minx = -4;
-  int maxx = 4;
+  double minx = -4;
+  double maxx = 4;
   int currentindex=0;
   // At least 20 MC events per bin
   int minnum = 0;
   // Minimum width of each bin
   double mindist = 0.2;
 
+  // Make a reference TF1 to draw from
+  bkg = new TF1("bkg", "0.5*exp(-x/2)", minx, maxx);
+
   // Make some new MC following the Gaussian
   for (int i = 0; i < int(norm*MCfactor); i++) {
-    double num = 0.7*rnd->Gaus(mean_prod, sigma_prod);
+    //double num = rnd->Gaus(mean_prod, sigma_prod);
+    double num = bkg->GetRandom();
     if (num < minx || num > maxx) {
       i--;
       continue;
@@ -217,6 +257,7 @@ void storer::Setup() {
 
   // The parameter values
   hMC = new TH1D("hMC", ";p_{#mu} Fake", binedges.size()-1, &binedges[0]);
+  hMC->Sumw2();
 
   // Fill the histogram with our MC
   for (int i=0; i<MC.size(); i++) {
@@ -226,88 +267,155 @@ void storer::Setup() {
   }
 
   // Now set the errors
-  for (int i = 0; i < hMC->GetNbinsX()+1; ++i) {
-    hMC->SetBinError(i+1, sqrt(hMC->GetBinContent(i+1)));
-  }
+  //for (int i = 0; i < hMC->GetNbinsX()+1; ++i) {
+    //hMC->SetBinError(i+1, sqrt(hMC->GetBinContent(i+1)));
+  //}
 
   // The bin normalisation, and uncerainty
-  for(int i=1; i<=hMC->GetNbinsX(); i++) {
+  for (int i = 0; i < hMC->GetNbinsX()+1; i++) {
     binnorm.push_back(1);
-    if (hMC->GetBinContent(i) > 0) binuncert.push_back(hMC->GetBinError(i)/hMC->GetBinContent(i));
-    else binuncert.push_back(0);
+    if (hMC->GetBinContent(i+1) > 0) {
+      //std::cout << "*" << std::endl;
+      /*
+      std::cout << hMC->GetBinError(i+1) << std::endl;
+      std::cout << sqrt(hMC->GetBinContent(i+1)) << std::endl;
+      std::cout << hMC->GetSumw2()->GetArray()[i+1] << std::endl;
+      std::cout << hMC->GetBinContent(i+1) << std::endl;
+      */
+      binuncert.push_back(hMC->GetBinError(i+1)/hMC->GetBinContent(i+1));
+    } else {
+      binuncert.push_back(0);
+    }
   }
 
   // The scaled MC histogram
   hMCnorm = (TH1D*)hMC->Clone("hMCnorm");
+  hMCnorm->Sumw2();
+  // Scale down by the MC factor
   hMCnorm->Scale(1./MCfactor);
 
   // The data histogram
   hData = (TH1D*)hMCnorm->Clone("hData");
+  hData->Sumw2();
 
   // Number of data points as a Gaussian around the N with error sqrt(N)
   //int ndatapts = rnd->Gaus(norm, sqrt(norm));
   int ndatapts = norm;
   hData->Reset();
-  //for(int i=0; i<ndatapts; i++) hData->Fill(rnd->Gaus(mean, sigma));
+  // Make the TF1 that the data is sampling from
+  sig = new TF1("sig", "1/sqrt(2*3.1415*[1])*exp(-pow(x-[0], 2)/(2*[1]))", minx, maxx);
+  sig->SetParameter(0, mean);
+  sig->SetParameter(1, sigma);
+
+  for (int i = 0; i < ndatapts; i++) {
+    // First get the random number from the TF1
+    double ran = bkg->GetRandom();    
+    hData->Fill(ran);
+  }
+
+  /*
+  // The data is a combination of signal and background
+  datagen = new TF1("datagen", "sig+bkg", minx, maxx);
+
+  TH1D *bkgsample = (TH1D*)hData->Clone("bkgsample");
+  TH1D *sigsample = (TH1D*)hData->Clone("sigsample");
+  bkgsample->Reset();
+  sigsample->Reset();
+  for (int i = 0; i < ndatapts; i++) {
+    // First get the random number from the TF1
+    double ran = bkg->GetRandom();    
+    bkgsample->Fill(ran);
+    ran = sig->GetRandom();
+    sigsample->Fill(ran);
+  }
+
+  for (int i = 0; i < hData->GetXaxis()->GetNbins()+1; ++i) {
+    hData->SetBinContent(i+1, bkgsample->GetBinContent(i+1)+sigsample->GetBinContent(i+1));
+  }
+  */
 
   // Try making the data a scaled version of the MC
+  /*
   for (int i = 0; i < hData->GetXaxis()->GetNbins()+1; ++i) {
     hData->SetBinContent(i+1, hMCnorm->GetBinContent(i+1));
     hData->SetBinError(i+1, sqrt(hData->GetBinContent(i+1)));
   }
+  */
 
   // Set up the weighting
-  SetWeighting();
+  //SetWeighting();
 
   // Update the data
   for (int i = 0; i < hData->GetXaxis()->GetNbins()+1; ++i) {
     double center = hData->GetBinCenter(i+1);
-    //double weight = gauspred->Eval(center)/gausnom->Eval(center);
-    double weight = gauspred->Eval(center);
+    double numer = sig->Eval(center);
+    double denom = bkg->Eval(center);
+    double weight = numer/denom;
+    //std::cout << i << " " << center << " " << weight << std::endl;
+    //std::cout << numer << " " << denom << std::endl;
+    //double weight = gauspred->Eval(center);
     hData->SetBinContent(i+1, hData->GetBinContent(i+1)*(1+weight));
   }
-
 }
 
 void storer::SetWeighting() {
-  gausnom = new TF1("gausnom","gaus", MC.front(), MC.back());
-  gausnom->SetParameters(1, mean, sigma);
-
+  // Set the weighting function
+  /*
   gauspred = new TF1("gauspred","gaus", MC.front(), MC.back());
   gauspred->SetParameters(1, mean, sigma);
+
+  // Set the reference to be whatever
+  gausnom = new TF1("gausnom","gaus", MC.front(), MC.back());
+  gausnom->SetParameters(1, mean_prod, sigma_prod);
+*/
 }
 
 void storer::ReWeight() {
 
   // Set the parameters of the Gaussian update
-  gauspred->SetParameters(1, meanp, sigmap);
+  sig->SetParameters(meanp, sigmap);
 
   // Reweight
-  if (testtype != LLHStat_StatWithNorm) reweight(hMCnorm, MC, gausnom, gauspred);
-  else reweightwithnorm(hMCnorm, MC, gausnom, gauspred, binnorm);
+  if (testtype != LLHStat_StatWithNorm) reweight(hMCnorm, MC, sig, bkg, norm);
+  else reweightwithnorm(hMCnorm, MC, sig, bkg, binnorm);
 
-  // Scale back
-  hMCnorm->Scale(norm/double(MC.size()));
+  /*
+  // Update the errors
+  for (int i = 0; i < hMC->GetNbinsX()+1; ++i) {
+    hMCnorm->SetBinError(i+1, binuncert[i]*hMCnorm->GetBinContent(i+1));
+  }
+  */
 }
 
 
 double storer::GetLikelihood() {
   // Calculate the likelihood
   double LLH = 0;
-  if      (testtype == LLHStat_StatOnly) LLH = calcLLH(hData, hMCnorm, hMC, false);
-  else if (testtype == LLHStat_StatOnlyPen) LLH = calcLLH(hData, hMCnorm, hMC, true);
+  if      (testtype == LLHStat_StatOnly) LLH = calcLLH(hData, hMCnorm);
   else if (testtype == LLHStat_PearsonNoPen) LLH = calcLLHwithPen(hData, hMCnorm, hMC, false);
   else if (testtype == LLHStat_PearsonPen) LLH = calcLLHwithPen(hData, hMCnorm, hMC, true);
   else if (testtype == LLHStat_StatWithFluc) LLH = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
   else if (testtype == LLHStat_StatWithNorm) LLH = calcLLHwithnorm(hData, hMCnorm, binnorm, binuncert);
   else if (testtype == LLH_BarlowBeestonGauss) LLH = LLHBarlowBeeston(hData, hMCnorm, binuncert);
+  else if (testtype == LLH_Tianlu) LLH = calcLLHTianlu(hData, hMCnorm);
+
+  //std::cout << "Poisson: " << calcLLH(hData, hMCnorm, hMC, false) << std::endl;
+  //std::cout << "Poisson penalty: " << calcLLH(hData, hMCnorm, hMC, true) << std::endl;
+  //std::cout << "Pearson no penalty: " << calcLLHwithPen(hData, hMCnorm, hMC, false) << std::endl;
+  //std::cout << "Pearson penalty: " << calcLLHwithPen(hData, hMCnorm, hMC, true) << std::endl;
+  //std::cout << "Poisson with var: " << calcLLHwithvar(hData, hMCnorm, hMC, rnd) << std::endl;
+  //std::cout << "Poisson with norm: " << calcLLHwithnorm(hData, hMCnorm, binnorm, binuncert) << std::endl;
+  //std::cout << "BB-lite: " << LLHBarlowBeeston(hData, hMCnorm, binuncert) << std::endl;
+  //std::cout << "Tianlu: " << calcLLHTianlu(hData, hMCnorm) << std::endl;
+  //std::cout << "*" << std::endl;
+
   return LLH;
 }
 
 
 
 void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
-  if (fittype > 7 || fittype < 0) {
+  if (fittype > 8 || fittype < 0) {
     std::cerr << "I take 0, 1, 2, 3, 4, 5, 6 as arguments" << std::endl;
     std::cerr << "  0 = LLHStat_StatOnly" << std::endl;
     std::cerr << "  1 = LLHStat_StatOnlyPen" << std::endl;
@@ -317,15 +425,14 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
     std::cerr << "  5 = LLHStat_StatWithNorm" << std::endl;
     std::cerr << "  6 = LLH_BarlowBeestonGaus" << std::endl;
     std::cerr << "  7 = LLH_BarlowBeestonPoiss" << std::endl;
+    std::cerr << "  8 = LLH_Tianlu" << std::endl;
     exit(-1);
   }
-  test_type testtype = static_cast<test_type>(fittype);
-  // random number
-  TRandom3* rnd = new TRandom3(10);
+
   // The mean of the parameter we want to measure
-  double mean_prod = -2.5;
+  double mean_prod = 2;
   // The sigma of the parameter we want to measure
-  double sigma_prod = 3;
+  double sigma_prod = 1;
 
   // The number of data events
   double norm = normIn;
@@ -333,53 +440,93 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   // The factor of more MC that we have over data
   double MCfactor = MCfactorIn;
 
-  storer Storage;
-  // Set up the defaults (the production values)
-  Storage.SetMeanProd(mean_prod);
-  Storage.SetSigmaProd(sigma_prod);
-
-  // The fitting values we're trying to find
-  Storage.SetMean(2);
-  Storage.SetSigma(0.9);
-  Storage.SetNorm(norm);
-  Storage.SetMCfact(MCfactor);
-
-  // Now set up the MC, the scaled MC and the data
-  Storage.Setup();
-
   TString filename = "MCStats_minuit2_fittype_";
-  filename += testtype;
-  filename += Form("_nData%2.2f_MCscale%1.1f_muSigmaOnly_dataclone", normIn, MCfactorIn);
+  filename += fittype;
+  filename += Form("_nData%2.2f_MCscale%1.1f_muSigmaOnly_lots", normIn, MCfactorIn);
   filename += ".root";
-  TFile* file = new TFile(filename,"RECREATE");
+  TFile* file = new TFile(filename, "RECREATE");
 
-  std::string fit = "Minuit2";
-  std::string type = "Migrad";
-  ROOT::Math::Minimizer *min = ROOT::Math::Factory::CreateMinimizer(fit, type);
+  TTree *tree = new TTree("output", "");
+  double mean;
+  double sigma;
+  double mean_error;
+  double sigma_error;
+  double edm2;
+  double min2;
+  int status;
+  tree->Branch("mean", &mean, "mean/D");
+  tree->Branch("sigma", &sigma, "sigma/D");
+  tree->Branch("error_mean", &mean_error, "error_mean/D");
+  tree->Branch("error_sigma", &sigma_error, "error_sigma/D");
+  tree->Branch("minimum_llh", &min2, "minimum_llh/D");
+  tree->Branch("edm", &edm2, "edm/D");
+  tree->Branch("status", &status, "status/D");
 
-  Storage.GetData()->Write("data_pre");
-  Storage.GetMC()->Write("mc_pre");
-  Storage.GetUnscaledMC()->Write("mcunscaled_pre");
+  const int ntest = 100;
+  int nBadFits = 0;
+  for (int i = 0; i < ntest; ++i) {
 
-  const int nparams = 2;
-  ROOT::Math::Functor f(&Storage, &storer::DoEval, 2);
+    storer Storage;
+    // Set up the defaults (the production values)
+    Storage.SetMeanProd(mean_prod);
+    Storage.SetSigmaProd(sigma_prod);
+    Storage.SetTestType(static_cast<test_type>(fittype));
 
-  min->SetFunction(f);
-  double var[nparams] = {0, 1};
-  double step[nparams] = {0.01, 0.01};
-  min->SetVariable(0, "x", var[0], step[0]);
-  min->SetVariable(1, "y", var[1], step[1]);
-  min->Minimize();
+    // The fitting values we're trying to find
+    Storage.SetMean(1);
+    Storage.SetSigma(0.1);
+    Storage.SetNorm(norm);
+    Storage.SetMCfact(MCfactor);
 
-  const double *xs = min->X();
-  std::cout << "Minimum: f(" << xs[0] << ", " << xs[1] << "): " << min->MinValue() << std::endl;
+    // Now set up the MC, the scaled MC and the data
+    Storage.Setup();
 
-  file->cd();
-  Storage.GetData()->Write();
-  Storage.GetMC()->Write();
-  Storage.GetUnscaledMC()->Write();
+    std::string fit = "Minuit2";
+    std::string type = "Migrad";
+    ROOT::Math::Minimizer *min = ROOT::Math::Factory::CreateMinimizer(fit, type);
+
+    file->cd();
+    Storage.GetData()->Write(Form("data_pre_%i", i));
+    Storage.GetMC()->Write(Form("mc_pre_%i", i));
+    Storage.GetUnscaledMC()->Write(Form("mcunscaled_pre_%i", i));
+
+    const int nparams = 2;
+    ROOT::Math::Functor f(&Storage, &storer::DoEval, 2);
+
+    min->SetFunction(f);
+    double var[nparams] = {0, 1};
+    double step[nparams] = {0.01, 0.01};
+    min->SetVariable(0, "x", var[0], step[0]);
+    min->SetVariable(1, "y", var[1], step[1]);
+    min->Minimize();
+
+    //min->PrintResults();
+    const double *postfit = min->X();
+    const double *errors = min->Errors();
+    const double minimum = min->MinValue();
+    const double edm = min->Edm();
+    std::cout << "Minimum: f(" << postfit[0] << "+/-" << errors[0] << ", " << postfit[1] << "+/-" << errors[1] <<  "): " << minimum << ", edm = " << edm << std::endl;
+
+    mean = postfit[0];
+    sigma = postfit[1];
+    mean_error = errors[0];
+    sigma_error = errors[1];
+    edm2 = edm;
+    min2 = minimum;
+    status = min->Status();
+    if (status != 0) nBadFits++;
+
+    tree->Fill();
+
+    Storage.GetData()->Write(Form("data_post_%i", i));
+    Storage.GetMC()->Write(Form("mc_post_%i", i));
+    Storage.GetUnscaledMC()->Write(Form("mcunscaled_post_%i", i));
+
+  }
+  tree->Write();
   file->Close();
 
+  std::cout << "Found " << nBadFits << "/" << ntest << " failed fits (" << double(nBadFits)/ntest*100.0 << "%)" << std::endl;
   std::cout << "Wrote to " << file->GetName() << std::endl;
 }
 
