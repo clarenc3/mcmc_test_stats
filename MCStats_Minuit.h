@@ -28,19 +28,21 @@ enum test_type {
   LLHStat_PearsonPen, 
 
   // Use statistical Poisson likelihood by fluctuating the MC around the MC central value and using that for the MC in the likelihood
-  LLHStat_StatWithFluc, 
+  //LLHStat_StatWithFluc, 
 
   // Use statistical Poisson likelihood and introduce a normalisation penalty relative the uncertainty in the bin
-  LLHStat_StatWithNorm, 
+  //LLHStat_StatWithNorm, 
 
   // Barlow-Beeston with Gaussian
   LLH_BarlowBeestonGauss,
 
   // Barlow-Beeston with Poisson
-  LLH_BarlowBeestonPoisson,
+  //LLH_BarlowBeestonPoisson,
 
   // Tianlu LLH
-  LLH_Tianlu
+  LLH_Tianlu,
+
+  nLLH
 };
 
 // A class to hold information about the fit

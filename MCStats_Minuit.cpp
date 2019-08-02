@@ -20,9 +20,14 @@ double calcLLHwithvar(TH1D* hdata, TH1D* hmc, TH1D* herrors, TRandom3* rnd) {
   for(int i = 0; i < hdata->GetNbinsX()+1; i++) {
     double dat = hdata->GetBinContent(i+1);
     // Throw the MC within the fractional MC statistical error
+    double origmc = hmc->GetBinContent(i+1);
+    // Get the fractional uncertainty: standard deviation 
+    double uncert = sqrt(hmc->GetSumw2()->GetArray()[i+1]);
+    double errors = herrors->GetBinContent(i+1);
+    //std::cout << uncert << " " << errors << std::endl;
     double mc;
-    double uncert = hmc->GetSumw2()->GetArray()[i+1];
-    if (uncert > 0) mc = rnd->Gaus(hmc->GetBinContent(i+1), uncert*hmc->GetBinContent(i+1));
+
+    if (uncert > 0) mc = rnd->Gaus(origmc, uncert);
     else mc = hmc->GetBinContent(i+1);
 
     if (dat > 0 && mc > 0) LLH += 2*(mc-dat+dat*TMath::Log(dat/mc));
@@ -356,6 +361,11 @@ void storer::Setup() {
     //double weight = gauspred->Eval(center);
     hData->SetBinContent(i+1, hData->GetBinContent(i+1)*(1+weight));
   }
+
+  // Calculate the reference distribution
+  sig->SetParameters(mean, sigma);
+  GetLikelihood(); 
+
 }
 
 void storer::SetWeighting() {
@@ -376,8 +386,9 @@ void storer::ReWeight() {
   sig->SetParameters(meanp, sigmap);
 
   // Reweight
-  if (testtype != LLHStat_StatWithNorm) reweight(hMCnorm, MC, sig, bkg, norm);
-  else reweightwithnorm(hMCnorm, MC, sig, bkg, binnorm);
+  reweight(hMCnorm, MC, sig, bkg, norm);
+  //if (testtype != LLHStat_StatWithNorm) reweight(hMCnorm, MC, sig, bkg, norm);
+  //else reweightwithnorm(hMCnorm, MC, sig, bkg, binnorm);
 
   /*
   // Update the errors
@@ -394,8 +405,8 @@ double storer::GetLikelihood() {
   if      (testtype == LLHStat_StatOnly) LLH = calcLLH(hData, hMCnorm);
   else if (testtype == LLHStat_PearsonNoPen) LLH = calcLLHwithPen(hData, hMCnorm, hMC, false);
   else if (testtype == LLHStat_PearsonPen) LLH = calcLLHwithPen(hData, hMCnorm, hMC, true);
-  else if (testtype == LLHStat_StatWithFluc) LLH = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
-  else if (testtype == LLHStat_StatWithNorm) LLH = calcLLHwithnorm(hData, hMCnorm, binnorm, binuncert);
+  //else if (testtype == LLHStat_StatWithFluc) LLH = calcLLHwithvar(hData, hMCnorm, hMC, rnd);
+  //else if (testtype == LLHStat_StatWithNorm) LLH = calcLLHwithnorm(hData, hMCnorm, binnorm, binuncert);
   else if (testtype == LLH_BarlowBeestonGauss) LLH = LLHBarlowBeeston(hData, hMCnorm, binuncert);
   else if (testtype == LLH_Tianlu) LLH = calcLLHTianlu(hData, hMCnorm);
 
@@ -415,17 +426,17 @@ double storer::GetLikelihood() {
 
 
 void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
-  if (fittype > 8 || fittype < 0) {
-    std::cerr << "I take 0, 1, 2, 3, 4, 5, 6 as arguments" << std::endl;
+  if (fittype > nLLH || fittype < 0) {
+    std::cerr << "I take ";
+    for (int i = 0; i < nLLH; ++i) std::cout << i << " ";
+    std::cout << "as arguments" << std::endl;
     std::cerr << "  0 = LLHStat_StatOnly" << std::endl;
-    std::cerr << "  1 = LLHStat_StatOnlyPen" << std::endl;
-    std::cerr << "  2 = LLHStat_PearsonNoPen" << std::endl;
-    std::cerr << "  3 = LLHStat_PearsonPen" << std::endl;
-    std::cerr << "  4 = LLHStat_StatWithFluc" << std::endl;
-    std::cerr << "  5 = LLHStat_StatWithNorm" << std::endl;
-    std::cerr << "  6 = LLH_BarlowBeestonGaus" << std::endl;
-    std::cerr << "  7 = LLH_BarlowBeestonPoiss" << std::endl;
-    std::cerr << "  8 = LLH_Tianlu" << std::endl;
+    std::cerr << "  1 = LLHStat_PearsonNoPen" << std::endl;
+    std::cerr << "  2 = LLHStat_PearsonPen" << std::endl;
+    //std::cerr << "  3 = LLHStat_StatWithFluc" << std::endl;
+    //std::cerr << "  4 = LLHStat_StatWithNorm" << std::endl;
+    std::cerr << "  3 = LLH_BarlowBeestonGaus" << std::endl;
+    std::cerr << "  4 = LLH_Tianlu" << std::endl;
     exit(-1);
   }
 
@@ -462,8 +473,11 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   tree->Branch("edm", &edm2, "edm/D");
   tree->Branch("status", &status, "status/D");
 
-  const int ntest = 100;
+  const int ntest = 500;
   int nBadFits = 0;
+  // The parameters that we're fitting
+  double mean_value = 1;
+  double sigma_value = 0.1;
   for (int i = 0; i < ntest; ++i) {
 
     storer Storage;
@@ -473,9 +487,11 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
     Storage.SetTestType(static_cast<test_type>(fittype));
 
     // The fitting values we're trying to find
-    Storage.SetMean(1);
-    Storage.SetSigma(0.1);
+    Storage.SetMean(mean_value);
+    Storage.SetSigma(sigma_value);
+    // How many data events
     Storage.SetNorm(norm);
+    // Factor how many more MC than data we have
     Storage.SetMCfact(MCfactor);
 
     // Now set up the MC, the scaled MC and the data
