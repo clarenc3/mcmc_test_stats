@@ -204,6 +204,15 @@ double LLHBarlowBeeston(TH1D *hData, TH1D *hMC, std::vector<double> binuncert) {
 
 storer::storer(int seed=0) {
   rnd = new TRandom3(seed);
+  mean = -999;
+  sigma = -999;
+  norm = -999;
+  MCfactor = -999;
+  mean_prod = -999;
+  sigma_prod = -999;
+  meanp = -999;
+  sigmap = -999;
+  RefLLH = -999;
 }
 
 // Destructor
@@ -224,7 +233,6 @@ double storer::DoEval(const double *x) {
 
   // Do the reweight
   ReWeight();
-  //std::cout << meanp << " " << sigmap << " = " << GetLikelihood() << std::endl;
 
   return GetLikelihood();
 }
@@ -363,9 +371,64 @@ void storer::Setup() {
   }
 
   // Calculate the reference distribution
-  sig->SetParameters(mean, sigma);
-  GetLikelihood(); 
+  meanp = mean;
+  sigmap = sigma;
+  ReWeight();
+  RefLLH = GetLikelihood(); 
+  // Reset the variables
+  meanp = 1;
+  sigmap = 1;
 
+  // Check the values
+  CheckMe();
+
+}
+bool storer::CheckMe() {
+
+  bool good = true;
+  if (mean == -999) {
+    std::cerr << "mean not set" << std::endl;
+    good = false;
+  }
+  if (sigma == -999) {
+    std::cerr << "sigma not set" << std::endl;
+    good = false;
+  }
+  if (norm == -999) {
+    std::cerr << "norm not set" << std::endl;
+    good = false;
+  }
+  if (MCfactor == -999) {
+    std::cerr << "MCfactor not set" << std::endl;
+    good = false;
+  }
+  if (mean_prod == -999) {
+    std::cerr << "mean_prod not set" << std::endl;
+    good = false;
+  }
+  if (sigma_prod == -999) {
+    std::cerr << "sigma_prod not set" << std::endl;
+    good = false;
+  }
+  if (meanp == -999) {
+    std::cerr << "meanp not set" << std::endl;
+    good = false;
+  }
+  if (sigmap == -999) {
+    std::cerr << "sigmap not set" << std::endl;
+    good = false;
+  }
+  if (RefLLH == -999) {
+    std::cerr << "RefLLH not set" << std::endl;
+    good = false;
+  }
+
+  if (!good) {
+    std::cerr << "Found error, will quit" << std::endl;
+    throw;
+  }
+
+  return good;
 }
 
 void storer::SetWeighting() {
@@ -464,12 +527,14 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   double sigma_error;
   double edm2;
   double min2;
+  double min2_true;
   int status;
   tree->Branch("mean", &mean, "mean/D");
   tree->Branch("sigma", &sigma, "sigma/D");
   tree->Branch("error_mean", &mean_error, "error_mean/D");
   tree->Branch("error_sigma", &sigma_error, "error_sigma/D");
   tree->Branch("minimum_llh", &min2, "minimum_llh/D");
+  tree->Branch("minimum_llh_true", &min2_true, "minimum_llh_true/D");
   tree->Branch("edm", &edm2, "edm/D");
   tree->Branch("status", &status, "status/D");
 
@@ -480,7 +545,7 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   double sigma_value = 0.1;
   for (int i = 0; i < ntest; ++i) {
 
-    storer Storage;
+    storer Storage(i);
     // Set up the defaults (the production values)
     Storage.SetMeanProd(mean_prod);
     Storage.SetSigmaProd(sigma_prod);
@@ -496,6 +561,9 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
 
     // Now set up the MC, the scaled MC and the data
     Storage.Setup();
+
+    // Get the true reference LLH
+    min2_true = Storage.GetRefLLH();
 
     std::string fit = "Minuit2";
     std::string type = "Migrad";
@@ -531,6 +599,23 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
     min2 = minimum;
     status = min->Status();
     if (status != 0) nBadFits++;
+
+    // Run Minos errors
+    double errup, errdown;
+    int runopt;
+    min->GetMinosError(0, errup, errdown, runopt);
+    mean_error = std::max(errup, errdown);
+    min->GetMinosError(1, errup, errdown, runopt);
+    sigma_error = std::max(errup, errdown);
+
+    /*
+    bool ok = min->GetMinosError(0, errup, errdown, runopt);
+    std::cout << ok << " for getting Minos Error for param 1" << std::endl;
+    std::cout << "mean_error=" << mean_error << std::endl;
+    std::cout << "minos + = " << errup << std::endl;
+    std::cout << "minos - = " << errdown << std::endl;
+    std::cout << "runopt = " << runopt << std::endl;
+    */
 
     tree->Fill();
 

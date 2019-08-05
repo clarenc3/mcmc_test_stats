@@ -60,6 +60,8 @@ class storer {
     TH1D *GetMC() { return hMCnorm; };
     TH1D *GetUnscaledMC() { return hMC; };
 
+    bool CheckMe();
+
     void SetMean(double meanp) { mean = meanp; }
     void SetSigma(double sigmap) { sigma = sigmap; }
     void SetNorm(double normp) { norm = normp; }
@@ -69,6 +71,8 @@ class storer {
     void SetSigmaProd(double sigmap) { sigma_prod = sigmap; }
 
     void SetTestType(test_type type) { testtype = type; }
+
+    double GetRefLLH() {return RefLLH;}
 
   private:
     TH1D* hData;
@@ -91,12 +95,14 @@ class storer {
     double meanp;
     double sigmap;
 
+    // Reference LLH
+    double RefLLH;
+
     // The raw vector of MC
     std::vector<double> MC;
     std::vector<double> binnorm;
     std::vector<double> binuncert;
 
     TRandom3 *rnd;
-
 };
 #endif

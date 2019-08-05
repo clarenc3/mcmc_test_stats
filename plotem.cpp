@@ -180,6 +180,9 @@ void Draw(std::string drawcmd, int rebin=1) {
   } else if (drawcmd == "minimum_llh") {
     minx = 0;
     maxx = 350;
+  } else if (drawcmd == "minimum_llh-minimum_llh_true") {
+    minx = -40;
+    maxx = 20;
   }
 
   canv->Clear();
@@ -204,15 +207,15 @@ void Draw(std::string drawcmd, int rebin=1) {
   line->SetY1(0);
   line->SetY2(1.2*max);
   if (drawcmd == "mean") {
-    line->SetX1(0);
-    line->SetX2(0);
-  } else if (drawcmd == "sigma") {
     line->SetX1(1);
     line->SetX2(1);
+  } else if (drawcmd == "sigma") {
+    line->SetX1(0.1);
+    line->SetX2(0.1);
   }
   line->SetLineWidth(3);
   line->SetLineColor(kRed);
-  line->SetLineStyle(kDashed);
+  //line->SetLineStyle(kDashed);
 
   TLine *line2[nFiles];
 
@@ -236,14 +239,17 @@ void Draw(std::string drawcmd, int rebin=1) {
     // Make the filler plot too
     FillMe(plots[i])->Draw("same");
     (canv->cd(i+1))->SetGridy(false);
-    line->Draw("same");
     line2[i] = new TLine(plots[i]->GetMean(), 0, plots[i]->GetMean(), 1.2*max);
     line2[i]->SetX2(plots[i]->GetMean());
-    line2[i]->SetLineColor(kWhite);
+    line2[i]->SetLineColor(kGray+3);
+    //line2[i]->SetLineStyle(kDashed);
     line2[i]->SetLineWidth(3);
-    line2[i]->Draw("same");
     text[i]->SetBorderSize(0);
     text[i]->Draw("same");
+    if (drawcmd == "mean" || drawcmd == "sigma") {
+      line->Draw("same");
+      line2[i]->Draw("same");
+    }
   }
   canv->Print(Form("%s.pdf", output.c_str()));
   canv->Clear();
@@ -279,6 +285,7 @@ void plotem(double ndata, double scale) {
   Draw(std::string("sigma"), 1);
   Draw(std::string("error_sigma"), 1);
   Draw(std::string("minimum_llh"), 1);
+  //Draw(std::string("minimum_llh-minimum_llh_true"), 1);
 
   canv->Print(Form("%s.pdf]", output.c_str()));
 }
