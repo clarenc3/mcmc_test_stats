@@ -51,7 +51,6 @@ class storer {
     storer(int);
     ~storer();
     void Setup();
-    void SetWeighting();
     void ReWeight();
     double GetLikelihood();
     double DoEval(const double *x) ;
@@ -67,12 +66,9 @@ class storer {
     void SetNorm(double normp) { norm = normp; }
     void SetMCfact(double mcfactorp) { MCfactor = mcfactorp; }
 
-    void SetMeanProd(double meanp) { mean_prod = meanp; }
-    void SetSigmaProd(double sigmap) { sigma_prod = sigmap; }
-
     void SetTestType(test_type type) { testtype = type; }
 
-    double GetRefLLH() {return RefLLH;}
+    double GetRefLLH() { return RefLLH; }
 
   private:
     TH1D* hData;
@@ -80,16 +76,12 @@ class storer {
     TH1D* hMCnorm;
     TF1* bkg;
     TF1* sig;
-    TF1* datagen;
     test_type testtype;
 
     double mean;
     double sigma;
     double norm;
     double MCfactor;
-
-    double mean_prod;
-    double sigma_prod;
 
     // Proposed
     double meanp;
