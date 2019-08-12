@@ -309,7 +309,7 @@ void storer::Setup() {
   int ndatapts = norm;
   hData->Reset();
   // Make the TF1 that the data is sampling from
-  sig = new TF1("sig", "1/sqrt(2*3.1415*[1])*exp(-pow(x-[0], 2)/(2*[1]))", minx, maxx);
+  sig = new TF1("sig", "-1/sqrt(2*3.1415*[1])*exp(-pow(x-[0], 2)/(2*[1]))", minx, maxx);
   sig->SetParameter(0, mean);
   sig->SetParameter(1, sigma);
 
@@ -460,7 +460,7 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
 
   TString filename = "MCStats_minuit2_fittype_";
   filename += fittype;
-  filename += Form("_nData%2.2f_MCscale%1.1f_muSigmaOnly_lots", normIn, MCfactorIn);
+  filename += Form("_nData%2.2f_MCscale%1.1f_muSigmaOnly_newshape_lots", normIn, MCfactorIn);
   filename += ".root";
   TFile* file = new TFile(filename, "RECREATE");
 
@@ -485,8 +485,8 @@ void MCStats(int fittype, double normIn=200., double MCfactorIn = 10) {
   const int ntest = 500;
   int nBadFits = 0;
   // The parameters that we're fitting
-  double mean_value = 0;
-  double sigma_value = 0.1;
+  double mean_value = -4.2;
+  double sigma_value = 0.2;
   for (int i = 0; i < ntest; ++i) {
 
     storer Storage(i);
